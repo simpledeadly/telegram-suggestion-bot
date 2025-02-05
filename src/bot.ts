@@ -4,6 +4,10 @@ import chalk from 'chalk'
 
 const bot = new Telegraf(process.env.BOT_TOKEN!)
 
+// const channelId = '-1002462309705' // ID of networkingFB channel
+const testChannelId = '-1002282641909' // ID of test channel
+const moderationChannelId = '-1002325968351' // ID of moderation channel
+
 type Suggestion = {
   id: number
   userId: number
@@ -36,11 +40,11 @@ bot.on('text', (ctx) => {
     
     pendingSuggestions.push({ ...newSuggestion, status: 'pending' })
 
-    console.log(chalk.hex('#00ffff')(`Start:`), `\npending:\n`, pendingSuggestions, `\npublished:\n`, publishedSuggestions, `\nrejected:\n`, rejectedSuggestions)
+    console.log(chalk.hex('#FFF')(`Start:\n`), chalk.hex('#8B5DFF')('pending:'), pendingSuggestions, '\n', chalk.hex('#3D3BF3')(`published:`), publishedSuggestions, '\n', chalk.hex('#9694FF')(`rejected:`), rejectedSuggestions, '\n')
     
     ctx.reply('Ваше предложение отправлено на модерацию.')
 
-    sendToModerators(newSuggestion, `Новое предложение от @${msg.from.username}:\n${newSuggestion.text}`)
+    sendToModerators(newSuggestion, `Новое предложение от @${msg.from.username}:\n\n${newSuggestion.text}`)
   }
 })
 
@@ -57,16 +61,34 @@ const sendToModerators = (suggestion: Suggestion, text: string) => {
     },
   }
 
-  bot.telegram.sendMessage(process.env.MODERATION_CHANNEL_ID!, text, options)
+  bot.telegram.sendMessage(moderationChannelId, text, options)
 }
 
-bot.on(callbackQuery('data'), (ctx) => {
-  const callbackQuery = ctx.callbackQuery.data
+bot.on(callbackQuery('data'), async (ctx) => {
+  const callbackQuery = ctx.callbackQuery
+  const msg: any = callbackQuery.message
 
-  const action = callbackQuery.split('_')[0]
-  const suggestionId = parseInt(callbackQuery.split('_')[1])
+  const action = callbackQuery.data.split('_')[0]
+  const suggestionId = parseInt(callbackQuery.data.split('_')[1])
 
   const suggestion = pendingSuggestions.find(s => s.id === suggestionId)
+
+  const editMessage = async (suggestion: Suggestion, result: 'Опубликовано' | 'Отклонено') => {
+    if (msg && msg.text) {
+      const currentText = msg.text
+      // ☑️🔘✔️🟢🔴
+      await ctx.editMessageText(`${currentText}\n\n${result === 'Опубликовано' ? '☑️' : '🔘'} *${`${result}`}*`, {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: 'Связаться', callback_data: `contact_${suggestion.id}`, url: `https://t.me/${suggestion.username}` }
+            ]
+          ]
+        },
+        parse_mode: 'Markdown'
+      })
+    }
+  }
   
   switch (action) {
     case 'publish':
@@ -74,9 +96,10 @@ bot.on(callbackQuery('data'), (ctx) => {
         ctx.answerCbQuery('Предложение подтверждено')
         publishedSuggestions.push({ ...suggestion, status: 'published' })
         pendingSuggestions = pendingSuggestions.filter(s => s.id !== suggestionId)
+        editMessage(suggestion, 'Опубликовано')
 
         const suggestionPost = `${suggestion.text}` // production template
-        bot.telegram.sendMessage(process.env.TEST_CHANNEL_ID!, suggestionPost)
+        bot.telegram.sendMessage(testChannelId, suggestionPost)
 
         bot.telegram.sendMessage(suggestion.userId, 'Предложение опубликовано!')
       }
@@ -86,12 +109,13 @@ bot.on(callbackQuery('data'), (ctx) => {
         ctx.answerCbQuery('Предложение отклонено')
         rejectedSuggestions.push({ ...suggestion, status: 'rejected' })
         pendingSuggestions = pendingSuggestions.filter(s => s.id !== suggestionId)
+        editMessage(suggestion, 'Отклонено')
 
-        bot.telegram.sendMessage(suggestion.userId, 'Ваше предложение отклонено.')
+        bot.telegram.sendMessage(suggestion.userId, 'Предложение отклонено.')
       }
       break
     }
-  console.log(chalk.hex('#00ffff')(`End:\n`), 'pending:', pendingSuggestions, `published:\n`, publishedSuggestions, `rejected:\n`, rejectedSuggestions)
+    console.log(chalk.hex('#FFF')(`End:\n`), chalk.hex('#8B5DFF')('pending:'), pendingSuggestions, '\n', chalk.hex('#3D3BF3')(`published:`), publishedSuggestions, '\n', chalk.hex('#9694FF')(`rejected:`), rejectedSuggestions, '\n')
 })
 
 bot.launch().catch(error => {
