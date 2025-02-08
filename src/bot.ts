@@ -56,9 +56,9 @@ bot.on('text', (ctx) => {
 
     console.log(chalk.hex('#FFF')(`Start:\n`), chalk.hex('#8B5DFF')('pending:'), pendingSuggestions, '\n', chalk.hex('#3D3BF3')(`published:`), publishedSuggestions, '\n', chalk.hex('#9694FF')(`rejected:`), rejectedSuggestions, '\n')
 
-    ctx.reply('Предложение отправлено на модерацию.')
+    ctx.reply(`*${'Предложение отправлено на модерацию'}* 💬\n\n_№${newSuggestion.id}_`, { parse_mode: 'Markdown' })
 
-    sendToModerators(newSuggestion, `Новое предложение от @${msg.from.username}:\n\n${newSuggestion.text}`)
+    sendToModerators(newSuggestion, `*${'Новое предложение'}*` + ` (_№${newSuggestion.id}):_\n\n${newSuggestion.text}\n\nот @${msg.from.username}`)
   }
 })
 
@@ -67,15 +67,16 @@ const sendToModerators = (suggestion: Suggestion, text: string) => {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: 'Опубликовать', callback_data: `publish_${suggestion.id}` },
-          { text: 'Отклонить', callback_data: `reject_${suggestion.id}` },
-          { text: 'Связаться', callback_data: `contact_${suggestion.id}`, url: `https://t.me/${suggestion.username}` },
-        ],
-      ],
-    },
+          { text: '☑️', callback_data: `publish_${suggestion.id}` },
+          { text: '🔘', callback_data: `reject_${suggestion.id}` },
+          { text: '🧹', callback_data: `erase_${suggestion.id}` },
+          { text: '🗣️', callback_data: `contact_${suggestion.id}`, url: `https://t.me/${suggestion.username}` }
+        ]
+      ]
+    }
   }
 
-  bot.telegram.sendMessage(moderationChannelId, text, options)
+  bot.telegram.sendMessage(moderationChannelId, text, { ...options, parse_mode: 'Markdown' })
 }
 
 bot.on(callbackQuery('data'), async (ctx) => {
@@ -87,33 +88,43 @@ bot.on(callbackQuery('data'), async (ctx) => {
 
   const suggestion = pendingSuggestions.find(s => s.id === suggestionId)
 
-  const editMessage = async (suggestion: Suggestion, result: 'Опубликовано' | 'Отклонено') => {
+  const editMessage = async (suggestion: Suggestion, result: 'Опубликовано' | 'Отклонено' | 'Стёрто') => {
     if (msg && msg.text) {
       const currentText = msg.text
 
-      await ctx.editMessageText(`${currentText}${result === 'Опубликовано' ? '\n\n☑️' : '\n\n🔘'} *${`${result}`}*`, {
+      await ctx.editMessageText(`${currentText}${result === 'Опубликовано' ? '\n\n☑️' : '\n\n🔘'} *${`${result}`}* _${'by @' + ctx.from.username}_`, {
+        parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
             [
-              { text: 'Связаться', callback_data: `contact_${suggestion.id}`, url: `https://t.me/${suggestion.username}` }
+              { text: 'Связаться 🗣️', callback_data: `contact_${suggestion.id}`, url: `https://t.me/${suggestion.username}` }
             ]
           ]
-        },
-        parse_mode: 'Markdown'
+        }
       })
     }
   }
 
-  const handleSuggestion = async (action: 'publish' | 'reject', suggestion?: SuggestionWithStatus<'pending'>) => {
+  const handleSuggestion = async (action: 'publish' | 'reject' | 'erase' , suggestion?: SuggestionWithStatus<'pending'>) => {
     if (!suggestion) {
-      return
-    } else {
       ctx.answerCbQuery('Предложение не может быть обработано, оно было до обновления')
+      return
+    }
+
+    if (action === 'erase') {
+      ctx.answerCbQuery('Предложение стёрто')
+
+      pendingSuggestions = pendingSuggestions.filter(s => s.id !== suggestion.id)
+      editMessage(suggestion, 'Стёрто')
+
+      await bot.telegram.sendMessage(suggestion.userId, `*${'Предложение'}*` + ` _№${suggestion.id}_ ` + `*${'стёрто'}* 🔘\n\nОтправьте новое предложение.`, { parse_mode: 'Markdown' })
+
+      return
     }
     
     const isPublish = action === 'publish'
     const status = isPublish ? 'published' : 'rejected'
-    const message = isPublish ? 'Предложение подтверждено' : 'Предложение отклонено'
+    const message = isPublish ? 'Предложение опубликовано' : 'Предложение отклонено'
     
     ctx.answerCbQuery(message)
 
@@ -139,16 +150,28 @@ bot.on(callbackQuery('data'), async (ctx) => {
     editMessage(suggestion, isPublish ? 'Опубликовано' : 'Отклонено')
 
     if (isPublish) {
-      const suggestionPost = `${suggestion.text}` // production template
-      await bot.telegram.sendMessage(testChannelId, suggestionPost)
-    }
+      const suggestionText = `${suggestion.text}` // production template
+      const suggestionPost = await bot.telegram.sendMessage(testChannelId, suggestionText)
 
-    await bot.telegram.sendMessage(suggestion.userId, `Предложение ${status === 'published' ? 'опубликовано' : 'отклонено'}.`)
+      await bot.telegram.sendMessage(suggestion.userId, `*${'Предложение опубликовано'}* ☑️\n\n_№${suggestion.id}_`, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: 'Оно уже здесь', url: `https://t.me/c/2282641909/${suggestionPost.message_id}` }
+            ]
+          ]
+        }
+      })
+    } else {
+      await bot.telegram.sendMessage(suggestion.userId, `*${'Предложение отклонено'}* 🔘\n\n_№${suggestion.id}_`, { parse_mode: 'Markdown' })
+    }
   }
 
   switch (action) {
     case 'publish':
     case 'reject':
+    case 'erase':
       await handleSuggestion(action, suggestion)
       console.log(chalk.hex('#FFF')(`End:\n`), chalk.hex('#8B5DFF')('pending:'), pendingSuggestions, '\n', chalk.hex('#3D3BF3')(`published:`), publishedSuggestions, '\n', chalk.hex('#9694FF')(`rejected:`), rejectedSuggestions, '\n')
       break
