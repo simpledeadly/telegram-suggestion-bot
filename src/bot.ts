@@ -16,6 +16,7 @@ type Suggestion = {
   username: string | undefined
   text: string
   status?: 'pending' | 'published' | 'rejected'
+  photoId?: string
 }
 
 type SuggestionWithStatus<T extends Suggestion['status']> = Suggestion & { status?: T }
@@ -30,7 +31,8 @@ let rejectedSuggestions: SuggestionWithStatus<'rejected'>[] = [];
     await sequelize.authenticate()
     console.log(chalk.hex('#2b67ff').bold('Подключение к базе данных успешно.'))
     
-    await sequelize.sync()
+    // await sequelize.sync()
+    await sequelize.sync({ force: true })
     console.log(chalk.hex('#2badff').bold('Модели синхронизированы.'))
   } catch (error) {
     console.error(chalk.hex('#ff1c1c').bold('Не удалось подключиться к базе данных:'), error)
@@ -41,32 +43,16 @@ bot.start((ctx) => {
   ctx.reply('Добро пожаловать! Отправьте ваши предложения.')
 })
 
-bot.on('text', (ctx) => {
-  const msg = ctx.message
+// const escapeMarkdown = (text: string) => {
+//   return text.replace(/([_*[\]()~`>#+\-=|{}.!@])/g, '\\$1')
+// }
 
-  if (msg.text) {
-    const newSuggestion: SuggestionWithStatus<'pending'> = {
-      id: Date.now(),
-      userId: msg.from.id,
-      username: msg.from.username,
-      text: msg.text
-    }
-
-    pendingSuggestions.push({ ...newSuggestion, status: 'pending' })
-
-    console.log(chalk.hex('#FFF')(`Start:\n`), chalk.hex('#8B5DFF')('pending:'), pendingSuggestions, '\n', chalk.hex('#3D3BF3')(`published:`), publishedSuggestions, '\n', chalk.hex('#9694FF')(`rejected:`), rejectedSuggestions, '\n')
-
-    ctx.reply(`*${'Предложение отправлено на модерацию'}* 💬\n\n_№${newSuggestion.id}_`, { parse_mode: 'Markdown' })
-
-    sendToModerators(newSuggestion, `*${'Новое предложение'}*` + ` (_№${newSuggestion.id}):_\n\n${newSuggestion.text}\n\nот @${msg.from.username}`)
-  }
-})
 
 const sendToModerators = (suggestion: Suggestion, text: string) => {
   const options = {
     reply_markup: {
       inline_keyboard: [
-        [
+      [
           { text: '☑️', callback_data: `publish_${suggestion.id}` },
           { text: '🔘', callback_data: `reject_${suggestion.id}` },
           { text: '🧹', callback_data: `erase_${suggestion.id}` },
@@ -76,8 +62,58 @@ const sendToModerators = (suggestion: Suggestion, text: string) => {
     }
   }
 
-  bot.telegram.sendMessage(moderationChannelId, text, { ...options, parse_mode: 'Markdown' })
+  const suggestionText = `Новое предложение (№${suggestion.id}):\n\n${text}\n\nот @${suggestion.username}`
+
+  if (suggestion.photoId && suggestion.photoId.length > 0) {
+    bot.telegram.sendPhoto(moderationChannelId, suggestion.photoId, { ...options, caption: suggestionText })
+      .catch(error => {
+        console.error("Ошибка при отправке сообщения с фото:", error)
+      })
+  } else {
+    bot.telegram.sendMessage(moderationChannelId, suggestionText, { ...options })
+      .catch(error => {
+        console.error("Ошибка при отправке сообщения:", error)
+      })
+  }
 }
+
+const handleInbox = (ctx: any, text: string, photoId?: string) => {
+  const msg = ctx.message
+
+  const newSuggestion: SuggestionWithStatus<'pending'> = {
+    id: Date.now(),
+    userId: msg.from.id,
+    username: msg.from.username,
+    text,
+    photoId
+  }
+
+  pendingSuggestions.push({ ...newSuggestion, status: 'pending' })
+
+  ctx.reply(`*${'Предложение отправлено на модерацию'}* 💬\n\n_№${newSuggestion.id}_`, { parse_mode: 'Markdown' })
+
+  sendToModerators(newSuggestion, newSuggestion.text)
+}
+
+bot.on('photo', (ctx) => {
+  const msg = ctx.message
+
+  if (msg.caption && msg.photo && Array.isArray(msg.photo)) {
+    const photoId = msg.photo[msg.photo.length - 1].file_id
+
+    handleInbox(ctx, msg.caption, photoId)
+  } else {
+    ctx.reply('Пришлите описание и фото одним сообщением')
+  }
+})
+
+bot.on('text', (ctx) => {
+  const msg = ctx.message
+
+  if (msg.text) {
+    handleInbox(ctx, msg.text)
+  }
+})
 
 bot.on(callbackQuery('data'), async (ctx) => {
   const callbackQuery = ctx.callbackQuery
@@ -89,28 +125,45 @@ bot.on(callbackQuery('data'), async (ctx) => {
   const suggestion = pendingSuggestions.find(s => s.id === suggestionId)
 
   const editMessage = async (suggestion: Suggestion, result: 'Опубликовано' | 'Отклонено' | 'Стёрто') => {
-    if (msg && msg.text) {
-      const currentText = msg.text
-
-      await ctx.editMessageText(`${currentText}${result === 'Опубликовано' ? '\n\n☑️' : '\n\n🔘'} *${`${result}`}* _${'by @' + ctx.from.username}_`, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: 'Связаться 🗣️', callback_data: `contact_${suggestion.id}`, url: `https://t.me/${suggestion.username}` }
+    if (suggestion.photoId) {
+      if (msg && msg.caption) {
+        const currentCaption = msg.caption
+        
+        await ctx.editMessageCaption(`${currentCaption}${result === 'Опубликовано' ? '\n\n☑️' : '\n\n🔘'} ${result} @${ctx.from.username}`, {
+          // parse_mode: 'MarkdownV2',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: 'Связаться 🗣️', callback_data: `contact_${suggestion.id}`, url: `https://t.me/${suggestion.username}` }
+              ]
             ]
-          ]
-        }
-      })
+          }
+        })
+      }
+    } else {
+      if (msg && msg.text) {
+        const currentText = msg.text
+
+        await ctx.editMessageText(`${currentText}${result === 'Опубликовано' ? '\n\n☑️' : '\n\n🔘'} ${result} @${(ctx.from.username)}`, {
+          // parse_mode: 'MarkdownV2',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: 'Связаться 🗣️', callback_data: `contact_${suggestion.id}`, url: `https://t.me/${suggestion.username}` }
+              ]
+            ]
+          }
+        })
+      }
     }
   }
 
   const handleSuggestion = async (action: 'publish' | 'reject' | 'erase' , suggestion?: SuggestionWithStatus<'pending'>) => {
     if (!suggestion) {
-      ctx.answerCbQuery('Предложение не может быть обработано, оно было до обновления')
+      ctx.answerCbQuery('Предложение не может быть обработано')
       return
     }
-
+    
     if (action === 'erase') {
       ctx.answerCbQuery('Предложение стёрто')
 
@@ -149,10 +202,9 @@ bot.on(callbackQuery('data'), async (ctx) => {
     pendingSuggestions = pendingSuggestions.filter(s => s.id !== suggestion.id)
     editMessage(suggestion, isPublish ? 'Опубликовано' : 'Отклонено')
 
-    if (isPublish) {
-      const suggestionText = `${suggestion.text}` // production template
-      const suggestionPost = await bot.telegram.sendMessage(testChannelId, suggestionText)
+    const post = `${suggestion.text}` // production template
 
+    const notifyUser = async (suggestionPost: any) => {
       await bot.telegram.sendMessage(suggestion.userId, `*${'Предложение опубликовано'}* ☑️\n\n_№${suggestion.id}_`, {
         parse_mode: 'Markdown',
         reply_markup: {
@@ -163,9 +215,18 @@ bot.on(callbackQuery('data'), async (ctx) => {
           ]
         }
       })
+    }
+
+    if (isPublish) {
+      if (suggestion.photoId) {
+        notifyUser(await bot.telegram.sendPhoto(testChannelId, suggestion.photoId, { caption: suggestion.text, parse_mode: 'Markdown' }))
+      } else {
+        notifyUser(await bot.telegram.sendMessage(testChannelId, post))
+      }
     } else {
       await bot.telegram.sendMessage(suggestion.userId, `*${'Предложение отклонено'}* 🔘\n\n_№${suggestion.id}_`, { parse_mode: 'Markdown' })
     }
+    console.log(chalk.hex('#FFF')(`End:\n`), chalk.hex('#8B5DFF')('pending:'), pendingSuggestions, '\n', chalk.hex('#3D3BF3')(`not published in DB:`), publishedSuggestions, '\n', chalk.hex('#9694FF')(`not rejected in DB:`), rejectedSuggestions, '\n')
   }
 
   switch (action) {
@@ -173,7 +234,6 @@ bot.on(callbackQuery('data'), async (ctx) => {
     case 'reject':
     case 'erase':
       await handleSuggestion(action, suggestion)
-      console.log(chalk.hex('#FFF')(`End:\n`), chalk.hex('#8B5DFF')('pending:'), pendingSuggestions, '\n', chalk.hex('#3D3BF3')(`published:`), publishedSuggestions, '\n', chalk.hex('#9694FF')(`rejected:`), rejectedSuggestions, '\n')
       break
   }
 })
