@@ -6,8 +6,8 @@ import { SuggestionModel } from './models/suggestion'
 
 const bot = new Telegraf(process.env.BOT_TOKEN!)
 
-// const channelId = '-1002462309705' // ID of networkingFB channel
-const testChannelId = '-1002282641909' // ID of test channel
+const channelId = '-1002462309705' // ID of networkingFB channel
+// const testChannelId = '-1002282641909' // ID of test channel
 const moderationChannelId = '-1002325968351' // ID of moderation channel
 const channelWithSuggestions = '-1002316616198' // ID of channelWithSuggestions channel
 const channelWithMessagesFromUsers = '-1002368509706' // ID of channelWithMessagesFromUsers channel
@@ -246,9 +246,13 @@ bot.on(callbackQuery('data'), async (ctx) => {
     const isPhoto = Boolean(suggestion.photoId)
     const currentContent = isPhoto ? msg.caption : msg.text
     if (!currentContent) return
+    
+    const args = currentContent.split(' ')
+    const allExceptBeginning = args.slice(2, args.length)
+    const updatedContent = 'Обработано ' + allExceptBeginning.join(' ')
   
     const statusIcon = result === 'Опубликовано' ? '\n\n☑️' : '\n\n🔘'
-    const newContent = `${currentContent}${statusIcon} ${result} @${ctx.from.username}`
+    const newContent = `${updatedContent}${statusIcon} ${result} @${ctx.from.username}`
   
     await (isPhoto
       ? ctx.editMessageCaption(newContent, {
@@ -329,9 +333,9 @@ bot.on(callbackQuery('data'), async (ctx) => {
 
     if (isPublish) {
       if (suggestion.photoId) {
-        notifyUser(await ctx.telegram.sendPhoto(testChannelId, suggestion.photoId, { caption: suggestion.text, parse_mode: 'Markdown' }))
+        notifyUser(await ctx.telegram.sendPhoto(channelId, suggestion.photoId, { caption: suggestion.text, parse_mode: 'Markdown' }))
       } else {
-        notifyUser(await ctx.telegram.sendMessage(testChannelId, post))
+        notifyUser(await ctx.telegram.sendMessage(channelId, post))
       }
     } else {
       await ctx.telegram.sendMessage(suggestion.userId, `*${'Предложение отклонено'}* 🔘\n\n_№${suggestion.id}_`, { parse_mode: 'Markdown' })
